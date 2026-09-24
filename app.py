@@ -116,22 +116,20 @@ HTML = """
 
                 const response = await fetch("/run");
 
-                if (!response.ok) {
-                    const text = await response.text();
-                    throw new Error(text || "Something went wrong.");
-                }
-
                 const data = await response.json();
 
-                if (!data.clipboard) {
-                    throw new Error("No pick data was returned.");
+                if (!response.ok) {
+                    throw new Error(
+                        data.error || "Something went wrong."
+                    );
                 }
 
                 output.value = data.clipboard;
 
                 copyButton.disabled = false;
 
-                status.textContent = "Latest picks loaded!";
+                status.textContent =
+                    "Latest picks loaded!";
 
             }
 
@@ -167,6 +165,17 @@ HTML = """
                 .split("\\n")
                 .map(row => row.split("\\t"));
 
+            /*
+             * The scraper produces:
+             *
+             * Row 0 = names
+             * Row 1 = tiebreakers
+             * Rows 2+ = picks
+             *
+             * There are 20 people and therefore 40 actual
+             * spreadsheet columns.
+             */
+
             let html = `
                 <table
                     border="1"
@@ -183,12 +192,13 @@ HTML = """
 
 
                 /*
-                 * FIRST ROW
+                 * NAME ROW
                  *
-                 * Entrant names.
+                 * Every person gets TWO actual table columns,
+                 * merged with colspan="2".
                  *
-                 * Each person gets ONE cell spanning
-                 * their two-column area.
+                 * This keeps Ben, Bova, Braden, etc. centered
+                 * over their two columns.
                  */
 
                 if (rowIndex === 0) {
@@ -197,41 +207,66 @@ HTML = """
 
                         const name = row[i] || "";
 
-                        html +=
-                            '<td colspan="2">' +
-                            escapeHtml(name) +
-                            '</td>';
+                        html += `
+                            <td
+                                colspan="2"
+                                style="
+                                    text-align: center;
+                                    vertical-align: middle;
+                                "
+                            >
+                                ${escapeHtml(name)}
+                            </td>
+                        `;
                     }
                 }
 
 
                 /*
-                 * SECOND ROW
+                 * TIEBREAKER ROW
                  *
-                 * Tiebreaker numbers.
+                 * IMPORTANT:
                  *
-                 * These stay as TWO separate cells.
+                 * Every value gets its OWN table cell.
+                 *
+                 * NO colspan here.
+                 *
+                 * Therefore:
+                 *
+                 * Ben = 21 | 31
+                 * Bova = 20 | 27
+                 * Braden = 22 | 38
+                 *
+                 * etc.
                  */
 
                 else if (rowIndex === 1) {
 
-                    row.forEach(cell => {
+                    for (let i = 0; i < row.length; i++) {
 
-                        html +=
-                            '<td>' +
-                            escapeHtml(cell || "") +
-                            '</td>';
-                    });
+                        const value = row[i] || "";
+
+                        html += `
+                            <td
+                                style="
+                                    text-align: center;
+                                    vertical-align: middle;
+                                "
+                            >
+                                ${escapeHtml(value)}
+                            </td>
+                        `;
+                    }
                 }
 
 
                 /*
-                 * REMAINING ROWS
+                 * PICK ROWS
                  *
-                 * Picks.
+                 * Every pick gets TWO actual table columns,
+                 * merged with colspan="2".
                  *
-                 * Each pick gets ONE cell spanning
-                 * two columns.
+                 * This matches the merged cells in the sheet.
                  */
 
                 else {
@@ -240,10 +275,17 @@ HTML = """
 
                         const pick = row[i] || "";
 
-                        html +=
-                            '<td colspan="2">' +
-                            escapeHtml(pick) +
-                            '</td>';
+                        html += `
+                            <td
+                                colspan="2"
+                                style="
+                                    text-align: center;
+                                    vertical-align: middle;
+                                "
+                            >
+                                ${escapeHtml(pick)}
+                            </td>
+                        `;
                     }
                 }
 
@@ -269,10 +311,10 @@ HTML = """
 
 
             /*
-             * Try the modern clipboard API first.
+             * First try the HTML clipboard.
              *
-             * This allows Google Sheets to receive the HTML
-             * table and preserve the colspan structure.
+             * This is what allows Google Sheets to understand
+             * the colspan/merged-cell information.
              */
 
             if (
@@ -284,20 +326,27 @@ HTML = """
 
                     const htmlBlob = new Blob(
                         [html],
-                        { type: "text/html" }
+                        {
+                            type: "text/html"
+                        }
                     );
 
                     const textBlob = new Blob(
                         [tsv],
-                        { type: "text/plain" }
+                        {
+                            type: "text/plain"
+                        }
                     );
 
-                    const item = new ClipboardItem({
-                        "text/html": htmlBlob,
-                        "text/plain": textBlob
-                    });
+                    const clipboardItem =
+                        new ClipboardItem({
+                            "text/html": htmlBlob,
+                            "text/plain": textBlob
+                        });
 
-                    await navigator.clipboard.write([item]);
+                    await navigator.clipboard.write([
+                        clipboardItem
+                    ]);
 
                     status.textContent =
                         "Copied! Paste into Google Sheets.";
@@ -309,8 +358,7 @@ HTML = """
                 catch (error) {
 
                     /*
-                     * If Safari rejects the HTML clipboard,
-                     * continue to the fallback below.
+                     * Continue to fallback.
                      */
                 }
             }
@@ -318,32 +366,32 @@ HTML = """
 
             /*
              * Safari fallback.
-             *
-             * Create a temporary editable element containing
-             * the HTML table and let the browser copy it.
              */
 
             try {
 
-                const temp = document.createElement("div");
+                const temporary =
+                    document.createElement("div");
 
-                temp.contentEditable = "true";
+                temporary.contentEditable = "true";
 
-                temp.style.position = "fixed";
-                temp.style.left = "-9999px";
-                temp.style.top = "0";
+                temporary.style.position = "fixed";
+                temporary.style.left = "-9999px";
+                temporary.style.top = "0";
 
-                temp.innerHTML = html;
+                temporary.innerHTML = html;
 
-                document.body.appendChild(temp);
-
-
-                const range = document.createRange();
-
-                range.selectNodeContents(temp);
+                document.body.appendChild(temporary);
 
 
-                const selection = window.getSelection();
+                const range =
+                    document.createRange();
+
+                range.selectNodeContents(temporary);
+
+
+                const selection =
+                    window.getSelection();
 
                 selection.removeAllRanges();
 
@@ -355,7 +403,7 @@ HTML = """
 
                 selection.removeAllRanges();
 
-                document.body.removeChild(temp);
+                document.body.removeChild(temporary);
 
 
                 status.textContent =
@@ -366,7 +414,7 @@ HTML = """
             catch (error) {
 
                 /*
-                 * Final fallback: plain TSV.
+                 * Last-resort plain-text copy.
                  */
 
                 try {
@@ -427,8 +475,13 @@ def run_scraper():
 
         stdout = result.stdout
 
-        start_marker = "=== CLIPBOARD_DATA_START ==="
-        end_marker = "=== CLIPBOARD_DATA_END ==="
+        start_marker = (
+            "=== CLIPBOARD_DATA_START ==="
+        )
+
+        end_marker = (
+            "=== CLIPBOARD_DATA_END ==="
+        )
 
 
         start = stdout.find(start_marker)
@@ -445,7 +498,9 @@ def run_scraper():
         start += len(start_marker)
 
 
-        clipboard_data = stdout[start:end].strip()
+        clipboard_data = (
+            stdout[start:end].strip()
+        )
 
 
         return jsonify({
