@@ -5,16 +5,25 @@ import os
 
 app = Flask(__name__)
 
+
 HTML = """
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
+
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
     <title>Chip Howard Picks</title>
 
+
     <style>
+
         body {
             font-family: Arial, sans-serif;
             max-width: 700px;
@@ -24,10 +33,12 @@ HTML = """
             color: #222;
         }
 
+
         h1 {
             text-align: center;
             margin-bottom: 25px;
         }
+
 
         button {
             width: 100%;
@@ -40,20 +51,24 @@ HTML = """
             margin-bottom: 12px;
         }
 
+
         #runButton {
             background: #007aff;
             color: white;
         }
+
 
         #copyButton {
             background: #34c759;
             color: white;
         }
 
+
         button:disabled {
             background: #999;
             cursor: not-allowed;
         }
+
 
         textarea {
             width: 100%;
@@ -68,24 +83,35 @@ HTML = """
             resize: vertical;
         }
 
+
         #status {
             text-align: center;
             margin: 12px 0;
             font-size: 15px;
             min-height: 20px;
         }
+
     </style>
+
 </head>
+
 
 <body>
 
+
     <h1>Chip Howard Picks</h1>
 
-    <button id="runButton" onclick="runScraper()">
+
+    <button
+        id="runButton"
+        onclick="runScraper()"
+    >
         Run Latest Picks
     </button>
 
+
     <div id="status"></div>
+
 
     <textarea
         id="output"
@@ -93,12 +119,18 @@ HTML = """
         readonly
     ></textarea>
 
-    <button id="copyButton" onclick="copyPicks()" disabled>
+
+    <button
+        id="copyButton"
+        onclick="copyPicks()"
+        disabled
+    >
         Copy for Google Sheets
     </button>
 
 
     <script>
+
 
         async function runScraper() {
 
@@ -116,17 +148,23 @@ HTML = """
 
 
             runButton.disabled = true;
+
             copyButton.disabled = true;
+
             output.value = "";
 
-            status.textContent = "Running scraper...";
+            status.textContent =
+                "Running scraper...";
 
 
             try {
 
-                const response = await fetch("/run");
+                const response =
+                    await fetch("/run");
 
-                const data = await response.json();
+
+                const data =
+                    await response.json();
 
 
                 if (!response.ok) {
@@ -135,31 +173,42 @@ HTML = """
                         data.error ||
                         "Something went wrong."
                     );
+
                 }
 
 
-                output.value = data.clipboard;
+                output.value =
+                    data.clipboard;
 
-                copyButton.disabled = false;
+
+                copyButton.disabled =
+                    false;
+
 
                 status.textContent =
                     "Latest picks loaded!";
 
             }
 
+
             catch (error) {
 
                 status.textContent =
-                    "Error: " + error.message;
+                    "Error: " +
+                    error.message;
 
             }
+
 
             finally {
 
-                runButton.disabled = false;
+                runButton.disabled =
+                    false;
 
             }
+
         }
+
 
 
         function escapeHtml(text) {
@@ -170,126 +219,145 @@ HTML = """
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
+
         }
+
 
 
         function buildGoogleSheetsHtml(tsv) {
 
             /*
-             * IMPORTANT:
+             * The scraper output does NOT contain names.
              *
-             * The scraper output DOES NOT contain names.
+             * Row 0:
+             * Tiebreaker numbers
              *
-             * Row 0 = tiebreakers
-             *
-             * Row 1+ = picks
+             * Row 1 and onward:
+             * Picks
              *
              * We are assuming the user will paste starting
-             * in the FIRST tiebreaker cell in Google Sheets.
+             * in the FIRST tiebreaker cell.
              */
 
 
-            const rows = tsv
-                .split("\\n")
-                .map(row => row.split("\\t"));
+            const rows =
+                tsv
+                    .split("\\n")
+                    .map(
+                        row => row.split("\\t")
+                    );
 
 
             let html = `
                 <table
-                    border="1"
-                    cellspacing="0"
-                    cellpadding="0"
-                    style="border-collapse: collapse;"
+                    style="
+                        border-collapse: collapse;
+                        border-spacing: 0;
+                        width: auto;
+                    "
                 >
             `;
 
 
-            rows.forEach((row, rowIndex) => {
+            rows.forEach(
+                (row, rowIndex) => {
 
-                html += "<tr>";
-
-
-                /*
-                 * FIRST ROW = TIEBREAKERS
-                 *
-                 * Every tiebreaker gets its own cell.
-                 *
-                 * Example:
-                 *
-                 * 21 | 31 | 20 | 27 | 22 | 38
-                 *
-                 * This creates the exact two-cell structure
-                 * that already exists in the Google Sheet.
-                 */
-
-                if (rowIndex === 0) {
-
-                    row.forEach(cell => {
-
-                        html += `
-                            <td
-                                style="
-                                    text-align: center;
-                                    vertical-align: middle;
-                                "
-                            >
-                                ${escapeHtml(cell || "")}
-                            </td>
-                        `;
-
-                    });
-                }
+                    html += "<tr>";
 
 
-                /*
-                 * ALL REMAINING ROWS = PICKS
-                 *
-                 * Each pick occupies TWO columns.
-                 *
-                 * Example:
-                 *
-                 * Rudder | [merged across second cell]
-                 *
-                 * This matches the merged cells already
-                 * present in the Google Sheet.
-                 */
+                    /*
+                     * FIRST ROW
+                     *
+                     * TIEBREAKERS
+                     *
+                     * Every tiebreaker is its own cell.
+                     *
+                     * Example:
+                     *
+                     * 21 | 31 | 20 | 27 | 22 | 38
+                     */
 
-                else {
+                    if (rowIndex === 0) {
 
-                    for (
-                        let i = 0;
-                        i < row.length;
-                        i += 2
-                    ) {
+                        row.forEach(cell => {
 
-                        const pick = row[i] || "";
+                            html += `
+                                <td
+                                    style="
+                                        text-align: center;
+                                        vertical-align: middle;
+                                        border: 1px solid #000000;
+                                        box-sizing: border-box;
+                                    "
+                                >
+                                    ${escapeHtml(
+                                        cell || ""
+                                    )}
+                                </td>
+                            `;
 
-
-                        html += `
-                            <td
-                                colspan="2"
-                                style="
-                                    text-align: center;
-                                    vertical-align: middle;
-                                "
-                            >
-                                ${escapeHtml(pick)}
-                            </td>
-                        `;
+                        });
 
                     }
+
+
+                    /*
+                     * ALL REMAINING ROWS
+                     *
+                     * PICKS
+                     *
+                     * Each pick spans TWO columns.
+                     *
+                     * This recreates the merged cells
+                     * that already exist in the Google Sheet.
+                     */
+
+                    else {
+
+                        for (
+                            let i = 0;
+                            i < row.length;
+                            i += 2
+                        ) {
+
+                            const pick =
+                                row[i] || "";
+
+
+                            html += `
+                                <td
+                                    colspan="2"
+                                    style="
+                                        text-align: center;
+                                        vertical-align: middle;
+                                        border: 1px solid #000000;
+                                        box-sizing: border-box;
+                                    "
+                                >
+                                    ${escapeHtml(
+                                        pick
+                                    )}
+                                </td>
+                            `;
+
+                        }
+
+                    }
+
+
+                    html += "</tr>";
+
                 }
-
-
-                html += "</tr>";
-            });
+            );
 
 
             html += "</table>";
 
 
             return html;
+
         }
+
 
 
         async function copyPicks() {
@@ -301,17 +369,23 @@ HTML = """
                 document.getElementById("status");
 
 
-            const tsv = output.value;
+            const tsv =
+                output.value;
+
 
             const html =
                 buildGoogleSheetsHtml(tsv);
 
 
             /*
-             * Try HTML clipboard first.
+             * Try the HTML clipboard first.
              *
-             * This is what preserves the merged
-             * two-column pick cells.
+             * This allows Google Sheets to receive:
+             *
+             * - centered text
+             * - borders
+             * - two-column merged pick cells
+             * - separate tiebreaker cells
              */
 
             if (
@@ -358,13 +432,18 @@ HTML = """
 
                 }
 
+
                 catch (error) {
 
                     /*
-                     * Continue to Safari fallback.
+                     * If the HTML clipboard fails,
+                     * continue to the Safari fallback.
                      */
+
                 }
+
             }
+
 
 
             /*
@@ -377,17 +456,27 @@ HTML = """
                     document.createElement("div");
 
 
-                temporary.contentEditable = "true";
-
-                temporary.style.position = "fixed";
-                temporary.style.left = "-9999px";
-                temporary.style.top = "0";
+                temporary.contentEditable =
+                    "true";
 
 
-                temporary.innerHTML = html;
+                temporary.style.position =
+                    "fixed";
+
+                temporary.style.left =
+                    "-9999px";
+
+                temporary.style.top =
+                    "0";
 
 
-                document.body.appendChild(temporary);
+                temporary.innerHTML =
+                    html;
+
+
+                document.body.appendChild(
+                    temporary
+                );
 
 
                 const range =
@@ -405,13 +494,19 @@ HTML = """
 
                 selection.removeAllRanges();
 
-                selection.addRange(range);
+
+                selection.addRange(
+                    range
+                );
 
 
-                document.execCommand("copy");
+                document.execCommand(
+                    "copy"
+                );
 
 
                 selection.removeAllRanges();
+
 
                 document.body.removeChild(
                     temporary
@@ -423,10 +518,12 @@ HTML = """
 
             }
 
+
             catch (error) {
 
                 /*
-                 * Final fallback.
+                 * Final fallback:
+                 * plain TSV.
                  */
 
                 try {
@@ -441,18 +538,23 @@ HTML = """
 
                 }
 
+
                 catch (finalError) {
 
                     status.textContent =
                         "Copy failed. Please select the text manually.";
 
                 }
+
             }
+
         }
 
     </script>
 
+
 </body>
+
 </html>
 """
 
@@ -460,7 +562,9 @@ HTML = """
 @app.route("/")
 def home():
 
-    return render_template_string(HTML)
+    return render_template_string(
+        HTML
+    )
 
 
 @app.route("/run")
@@ -477,7 +581,10 @@ def run_scraper():
 
 
         result = subprocess.run(
-            [sys.executable, scraper_path],
+            [
+                sys.executable,
+                scraper_path
+            ],
             capture_output=True,
             text=True,
             timeout=120
@@ -496,18 +603,24 @@ def run_scraper():
         stdout = result.stdout
 
 
-        start_marker = "=== CLIPBOARD_DATA_START ==="
+        start_marker = (
+            "=== CLIPBOARD_DATA_START ==="
+        )
 
-        end_marker = "=== CLIPBOARD_DATA_END ==="
+
+        end_marker = (
+            "=== CLIPBOARD_DATA_END ==="
+        )
 
 
         start = stdout.find(
-            start_marker
-        )
+                start_marker
+            )
+
 
         end = stdout.find(
-            end_marker
-        )
+                end_marker
+            )
 
 
         if start == -1 or end == -1:
@@ -518,14 +631,19 @@ def run_scraper():
             }), 500
 
 
-        start += len(start_marker)
+        start += len(
+            start_marker
+        )
 
 
-        clipboard_data = stdout[start:end].strip()
+        clipboard_data = (
+            stdout[start:end].strip()
+        )
 
 
         return jsonify({
-            "clipboard": clipboard_data
+            "clipboard":
+                clipboard_data
         })
 
 
@@ -540,7 +658,8 @@ def run_scraper():
     except Exception as e:
 
         return jsonify({
-            "error": str(e)
+            "error":
+                str(e)
         }), 500
 
 
