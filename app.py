@@ -226,20 +226,6 @@ HTML = """
 
         function buildGoogleSheetsHtml(tsv) {
 
-            /*
-             * The scraper output does NOT contain names.
-             *
-             * Row 0:
-             * Tiebreaker numbers
-             *
-             * Row 1 and onward:
-             * Picks
-             *
-             * We are assuming the user will paste starting
-             * in the FIRST tiebreaker cell.
-             */
-
-
             const rows =
                 tsv
                     .split("\\n")
@@ -254,6 +240,7 @@ HTML = """
                         border-collapse: collapse;
                         border-spacing: 0;
                         width: auto;
+                        vertical-align: middle;
                     "
                 >
             `;
@@ -262,19 +249,19 @@ HTML = """
             rows.forEach(
                 (row, rowIndex) => {
 
-                    html += "<tr>";
+                    html += `
+                        <tr
+                            style="
+                                vertical-align: middle;
+                            "
+                        >
+                    `;
 
 
                     /*
-                     * FIRST ROW
-                     *
-                     * TIEBREAKERS
+                     * TIEBREAKER ROW
                      *
                      * Every tiebreaker is its own cell.
-                     *
-                     * Example:
-                     *
-                     * 21 | 31 | 20 | 27 | 22 | 38
                      */
 
                     if (rowIndex === 0) {
@@ -302,14 +289,9 @@ HTML = """
 
 
                     /*
-                     * ALL REMAINING ROWS
+                     * PICK ROWS
                      *
-                     * PICKS
-                     *
-                     * Each pick spans TWO columns.
-                     *
-                     * This recreates the merged cells
-                     * that already exist in the Google Sheet.
+                     * Each pick spans two columns.
                      */
 
                     else {
@@ -377,17 +359,6 @@ HTML = """
                 buildGoogleSheetsHtml(tsv);
 
 
-            /*
-             * Try the HTML clipboard first.
-             *
-             * This allows Google Sheets to receive:
-             *
-             * - centered text
-             * - borders
-             * - two-column merged pick cells
-             * - separate tiebreaker cells
-             */
-
             if (
                 navigator.clipboard &&
                 window.ClipboardItem
@@ -434,11 +405,6 @@ HTML = """
 
 
                 catch (error) {
-
-                    /*
-                     * If the HTML clipboard fails,
-                     * continue to the Safari fallback.
-                     */
 
                 }
 
@@ -521,11 +487,6 @@ HTML = """
 
             catch (error) {
 
-                /*
-                 * Final fallback:
-                 * plain TSV.
-                 */
-
                 try {
 
                     await navigator.clipboard.writeText(
@@ -603,24 +564,19 @@ def run_scraper():
         stdout = result.stdout
 
 
-        start_marker = (
-            "=== CLIPBOARD_DATA_START ==="
-        )
+        start_marker = "=== CLIPBOARD_DATA_START ==="
 
-
-        end_marker = (
-            "=== CLIPBOARD_DATA_END ==="
-        )
+        end_marker = "=== CLIPBOARD_DATA_END ==="
 
 
         start = stdout.find(
-                start_marker
-            )
+            start_marker
+        )
 
 
         end = stdout.find(
-                end_marker
-            )
+            end_marker
+        )
 
 
         if start == -1 or end == -1:
@@ -636,9 +592,7 @@ def run_scraper():
         )
 
 
-        clipboard_data = (
-            stdout[start:end].strip()
-        )
+        clipboard_data = stdout[start:end].strip()
 
 
         return jsonify({
