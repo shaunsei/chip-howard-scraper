@@ -4,6 +4,7 @@ import re
 import subprocess
 import warnings
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Hide the harmless urllib3 LibreSSL warning
 warnings.filterwarnings("ignore", message=".*LibreSSL.*")
@@ -118,8 +119,8 @@ def find_latest_entry(soup, person):
         if not rows:
             continue
 
-        # Build a visual table grid so merged cells do not throw
-        # off the week-column positions.
+        # Build a visual table grid so colspan/rowspan cells do not
+        # shift the week-column positions.
         grid = {}
         row_cells = {}
 
@@ -159,42 +160,29 @@ def find_latest_entry(soup, person):
                 except (TypeError, ValueError):
                     rowspan = 1
 
-                colspan = max(
-                    1,
-                    colspan
-                )
-
-                rowspan = max(
-                    1,
-                    rowspan
-                )
+                colspan = max(1, colspan)
+                rowspan = max(1, rowspan)
 
                 for r in range(
                     row_index,
                     row_index + rowspan
                 ):
-
                     for c in range(
                         current_column,
                         current_column + colspan
                     ):
-
                         grid[(r, c)] = cell
 
                 row_cells.setdefault(
-                    row_index,
-                    []
+                    row_index, []
                 ).append(
-                    (
-                        current_column,
-                        cell
-                    )
+                    (current_column, cell)
                 )
 
                 current_column += colspan
 
-        # Find the W1, W2, W3, etc. headers and their actual
-        # visual positions.
+        # Find W1, W2, W3, etc. headers and their actual visual
+        # positions.
         weekly_headers = {}
 
         for (row_index, column_index), cell in grid.items():
@@ -210,14 +198,7 @@ def find_latest_entry(soup, person):
             )
 
             if match:
-
-                week_number = int(
-                    match.group(1)
-                )
-
-                weekly_headers[
-                    week_number
-                ] = (
+                weekly_headers[int(match.group(1))] = (
                     row_index,
                     column_index,
                     cell
@@ -226,35 +207,23 @@ def find_latest_entry(soup, person):
         if not weekly_headers:
             continue
 
-        latest_week = max(
-            weekly_headers.keys()
-        )
+        latest_week = max(weekly_headers.keys())
 
-        header_row, header_column, header_cell = (
-            weekly_headers[latest_week]
-        )
+        header_row, _, header_cell = weekly_headers[latest_week]
 
-        # Find every visual column covered by the newest-week
-        # header cell.  This handles colspan correctly.
         header_columns = [
             column_index
-            for (
-                row_index,
-                column_index
-            ), cell in grid.items()
-            if (
-                row_index == header_row
-                and cell is header_cell
-            )
+            for (row_index, column_index), cell in grid.items()
+            if row_index == header_row and cell is header_cell
         ]
 
-        # Find this person's row.  We don't assume their name
-        # is necessarily the first physical cell.
+        # Find the person's row without assuming their name is
+        # necessarily the first physical cell.
         person_row_index = None
 
         for row_index, cells in row_cells.items():
 
-            for column_index, cell in cells:
+            for _, cell in cells:
 
                 cell_text = cell.get_text(
                     " ",
@@ -262,7 +231,6 @@ def find_latest_entry(soup, person):
                 )
 
                 if cell_text == person:
-
                     person_row_index = row_index
                     break
 
@@ -272,32 +240,20 @@ def find_latest_entry(soup, person):
         if person_row_index is None:
             continue
 
-        # Get the actual cell(s) underneath the newest-week
-        # header.
+        # Look only underneath the newest-week header.
         possible_cells = []
 
-        for (
-            row_index,
-            column_index
-        ), cell in grid.items():
+        for (row_index, column_index), cell in grid.items():
 
             if row_index != person_row_index:
                 continue
 
-            if column_index in header_columns:
+            if column_index in header_columns and cell not in possible_cells:
+                possible_cells.append(cell)
 
-                if cell not in possible_cells:
-
-                    possible_cells.append(
-                        cell
-                    )
-
-        # Look for a real entry link in the newest week only.
         for latest_cell in possible_cells:
 
-            cell_html = str(
-                latest_cell
-            )
+            cell_html = str(latest_cell)
 
             match = re.search(
                 r"ContestEntryView\.aspx\?id=(\d+)",
@@ -306,21 +262,19 @@ def find_latest_entry(soup, person):
             )
 
             if match:
-
                 return {
                     "week": latest_week,
                     "entry_id": match.group(1)
                 }
 
-        # The person exists, but there is no entry link in the
-        # newest week. Leave them blank. Never use an older week.
+        # No entry in the newest week means blank. Never fall back
+        # to an older week.
         return {
             "week": latest_week,
             "entry_id": ""
         }
 
     return None
-
 
 
 # ============================================================
@@ -613,11 +567,9 @@ standings_soup = BeautifulSoup(
 
 results = []
 
-for person in PEOPLE:
 
-    print(
-        f"Looking up: {person}"
-    )
+def prepare_person(person):
+    """Find the newest entry and download/parse that entry if present."""
 
     week = ""
     entry_id = ""
@@ -632,13 +584,6 @@ for person in PEOPLE:
             person
         )
 
-        # ====================================================
-        # NO CURRENT-WEEK PICKS
-        #
-        # This includes someone who has "-" for the newest
-        # week. We intentionally leave everything blank.
-        # ====================================================
-
         if (
             not entry_info
             or not entry_info["entry_id"]
@@ -648,102 +593,118 @@ for person in PEOPLE:
 
                 week = entry_info["week"]
 
-                print(
-                    f"Latest week: W{week}"
-                )
-
-                print(
-                    "No picks submitted for this week - "
-                    "using blank placeholder."
+                message = (
+                    f"Latest week: W{week} - "
+                    "no picks submitted; blank placeholder."
                 )
 
             else:
-
-                print(
+                message = (
                     "No available entry found - "
                     "using blank placeholder."
                 )
 
-        # ====================================================
-        # CURRENT-WEEK PICKS FOUND
-        # ====================================================
+            return {
+                "username": person,
+                "display_name": DISPLAY_NAMES[person],
+                "week": week,
+                "entry_id": entry_id,
+                "tiebreaker_1": tiebreaker_1,
+                "tiebreaker_2": tiebreaker_2,
+                "picks": picks,
+                "message": message,
+                "warnings": []
+            }
 
-        else:
+        week = entry_info["week"]
+        entry_id = entry_info["entry_id"]
 
-            week = entry_info["week"]
+        entry_url = (
+            "http://www.chiphoward.com/"
+            f"ContestEntryView.aspx?id={entry_id}"
+        )
 
-            entry_id = entry_info["entry_id"]
+        entry_html = get_page(entry_url)
+        parsed = parse_entry(entry_html)
 
-            print(
-                f"Latest week: W{week}"
-            )
+        tiebreaker_1 = parsed["tiebreaker_1"]
+        tiebreaker_2 = parsed["tiebreaker_2"]
+        picks = parsed["picks"]
 
-            print(
-                f"Entry ID: {entry_id}"
-            )
-
-            print(
-                "Downloading picks..."
-            )
-
-            entry_url = (
-                "http://www.chiphoward.com/"
-                f"ContestEntryView.aspx?id={entry_id}"
-            )
-
-            entry_html = get_page(
-                entry_url
-            )
-
-            parsed = parse_entry(
-                entry_html
-            )
-
-            tiebreaker_1 = (
-                parsed["tiebreaker_1"]
-            )
-
-            tiebreaker_2 = (
-                parsed["tiebreaker_2"]
-            )
-
-            picks = parsed["picks"]
-
-            for warning in parsed["warnings"]:
-
-                print(
-                    f"  Warning: {warning}"
-                )
-
-            print(
-                f"Successfully read: "
-                f"{DISPLAY_NAMES[person]}"
-            )
+        return {
+            "username": person,
+            "display_name": DISPLAY_NAMES[person],
+            "week": week,
+            "entry_id": entry_id,
+            "tiebreaker_1": tiebreaker_1,
+            "tiebreaker_2": tiebreaker_2,
+            "picks": picks,
+            "message": (
+                f"Latest week: W{week}, Entry ID: {entry_id}, "
+                f"Successfully read: {DISPLAY_NAMES[person]}"
+            ),
+            "warnings": parsed["warnings"]
+        }
 
     except Exception as error:
 
+        return {
+            "username": person,
+            "display_name": DISPLAY_NAMES[person],
+            "week": "",
+            "entry_id": "",
+            "tiebreaker_1": "",
+            "tiebreaker_2": "",
+            "picks": {},
+            "message": (
+                f"Error reading {person}: {error} - "
+                "using blank placeholder."
+            ),
+            "warnings": []
+        }
+
+
+# Download entry pages concurrently. The standings page is still
+# downloaded exactly once, and each person is still restricted to
+# the newest week only. Five workers keeps the speed improvement
+# reasonable without sending all requests at once.
+MAX_WORKERS = 5
+
+print(
+    f"Downloading and parsing entries with up to "
+    f"{MAX_WORKERS} simultaneous requests..."
+)
+print()
+
+with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+
+    future_to_person = {
+        executor.submit(prepare_person, person): person
+        for person in PEOPLE
+    }
+
+    completed = 0
+
+    for future in as_completed(future_to_person):
+
+        person = future_to_person[future]
+        completed += 1
+
+        result = future.result()
+
         print(
-            f"Error reading {person}: {error} - "
-            "using blank placeholder."
+            f"[{completed}/{len(PEOPLE)}] "
+            f"{person}: {result['message']}"
         )
 
-        week = ""
-        entry_id = ""
-        tiebreaker_1 = ""
-        tiebreaker_2 = ""
-        picks = {}
+        for warning in result["warnings"]:
+            print(
+                f"  Warning: {warning}"
+            )
 
-    results.append({
-        "username": person,
-        "display_name": DISPLAY_NAMES[person],
-        "week": week,
-        "entry_id": entry_id,
-        "tiebreaker_1": tiebreaker_1,
-        "tiebreaker_2": tiebreaker_2,
-        "picks": picks
-    })
+        results.append(result)
 
-    print()
+print()
 
 
 # ============================================================
