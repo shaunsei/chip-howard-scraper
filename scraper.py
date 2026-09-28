@@ -95,6 +95,18 @@ def get_page(url):
 
 # ============================================================
 # FIND MOST RECENT WEEK / ENTRY
+#
+# IMPORTANT:
+#
+# We ONLY use the newest week shown on the standings page.
+#
+# If the person has an entry link for that newest week,
+# we use it.
+#
+# If the newest week has no entry link (for example "-"),
+# we consider that person MISSING for the current week.
+#
+# We DO NOT fall back to an older week's picks.
 # ============================================================
 
 def find_latest_entry(soup, person):
@@ -105,9 +117,12 @@ def find_latest_entry(soup, person):
 
         weekly_columns = []
 
+        # Find all W1, W2, W3, etc. column positions.
         for row in rows:
 
-            cells = row.find_all(["th", "td"])
+            cells = row.find_all(
+                ["th", "td"]
+            )
 
             for index, cell in enumerate(cells):
 
@@ -136,10 +151,15 @@ def find_latest_entry(soup, person):
         if not weekly_columns:
             continue
 
+        # Sort newest week first.
         weekly_columns.sort(
             reverse=True
         )
 
+        # The first item is the newest week.
+        latest_week, latest_column_index = weekly_columns[0]
+
+        # Find this person's row.
         for row in rows:
 
             cells = row.find_all(
@@ -157,27 +177,45 @@ def find_latest_entry(soup, person):
             if row_name != person:
                 continue
 
-            for week_number, column_index in weekly_columns:
+            # Make sure the newest-week column exists.
+            if latest_column_index >= len(cells):
 
-                if column_index >= len(cells):
-                    continue
+                return {
+                    "week": latest_week,
+                    "entry_id": ""
+                }
 
-                weekly_cell = cells[column_index]
+            latest_cell = cells[
+                latest_column_index
+            ]
 
-                cell_html = str(weekly_cell)
+            cell_html = str(
+                latest_cell
+            )
 
-                match = re.search(
-                    r"ContestEntryView\.aspx\?id=(\d+)",
-                    cell_html,
-                    re.IGNORECASE
-                )
+            # Look for an actual entry link in the CURRENT week.
+            match = re.search(
+                r"ContestEntryView\.aspx\?id=(\d+)",
+                cell_html,
+                re.IGNORECASE
+            )
 
-                if match:
+            if match:
 
-                    return {
-                        "week": week_number,
-                        "entry_id": match.group(1)
-                    }
+                return {
+                    "week": latest_week,
+                    "entry_id": match.group(1)
+                }
+
+            # No entry link means the person did not submit
+            # picks for the newest week.
+            #
+            # IMPORTANT:
+            # Do NOT fall back to an older week.
+            return {
+                "week": latest_week,
+                "entry_id": ""
+            }
 
     return None
 
@@ -287,7 +325,9 @@ def parse_entry(html):
             "Could not find entry information."
         )
 
-    entry_html = str(entry_label)
+    entry_html = str(
+        entry_label
+    )
 
     game_matches = re.findall(
         r"Game\s+(\d+):\s*(.*?)(?:<br\s*/?>|$)",
@@ -299,11 +339,14 @@ def parse_entry(html):
 
     tiebreaker_1 = ""
     tiebreaker_2 = ""
+
     warnings = []
 
     for game_number, game_html in game_matches:
 
-        game_number = int(game_number)
+        game_number = int(
+            game_number
+        )
 
         game_soup = BeautifulSoup(
             game_html,
@@ -356,16 +399,20 @@ def parse_entry(html):
 
                 if team1_soup.find("strong"):
 
-                    selected_text = team1_soup.get_text(
-                        " ",
-                        strip=True
+                    selected_text = (
+                        team1_soup.get_text(
+                            " ",
+                            strip=True
+                        )
                     )
 
                 else:
 
-                    selected_text = team2_soup.get_text(
-                        " ",
-                        strip=True
+                    selected_text = (
+                        team2_soup.get_text(
+                            " ",
+                            strip=True
+                        )
                     )
 
                 selected_team = re.sub(
@@ -406,6 +453,7 @@ def parse_entry(html):
                 ]:
 
                     selected_team = text
+
                     break
 
             if selected_team:
@@ -435,13 +483,18 @@ print()
 # GET LIVE STANDINGS
 # ============================================================
 
-print("Getting live standings page...")
+print(
+    "Getting live standings page..."
+)
 
 standings_html = get_page(
     STANDINGS_URL
 )
 
-print("Live standings loaded.")
+print(
+    "Live standings loaded."
+)
+
 print()
 
 
@@ -476,16 +529,46 @@ for person in PEOPLE:
             person
         )
 
-        if not entry_info:
+        # ====================================================
+        # NO CURRENT-WEEK PICKS
+        #
+        # This includes someone who has "-" for the newest
+        # week. We intentionally leave everything blank.
+        # ====================================================
 
-            print(
-                "No available entry found - "
-                "using blank placeholder."
-            )
+        if (
+            not entry_info
+            or not entry_info["entry_id"]
+        ):
+
+            if entry_info:
+
+                week = entry_info["week"]
+
+                print(
+                    f"Latest week: W{week}"
+                )
+
+                print(
+                    "No picks submitted for this week - "
+                    "using blank placeholder."
+                )
+
+            else:
+
+                print(
+                    "No available entry found - "
+                    "using blank placeholder."
+                )
+
+        # ====================================================
+        # CURRENT-WEEK PICKS FOUND
+        # ====================================================
 
         else:
 
             week = entry_info["week"]
+
             entry_id = entry_info["entry_id"]
 
             print(
@@ -513,8 +596,14 @@ for person in PEOPLE:
                 entry_html
             )
 
-            tiebreaker_1 = parsed["tiebreaker_1"]
-            tiebreaker_2 = parsed["tiebreaker_2"]
+            tiebreaker_1 = (
+                parsed["tiebreaker_1"]
+            )
+
+            tiebreaker_2 = (
+                parsed["tiebreaker_2"]
+            )
+
             picks = parsed["picks"]
 
             for warning in parsed["warnings"]:
@@ -524,7 +613,8 @@ for person in PEOPLE:
                 )
 
             print(
-                f"Successfully read: {DISPLAY_NAMES[person]}"
+                f"Successfully read: "
+                f"{DISPLAY_NAMES[person]}"
             )
 
     except Exception as error:
@@ -559,7 +649,9 @@ for person in PEOPLE:
 
 results = sorted(
     results,
-    key=lambda result: result["display_name"].lower()
+    key=lambda result: result[
+        "display_name"
+    ].lower()
 )
 
 
@@ -568,10 +660,16 @@ results = sorted(
 # ============================================================
 
 print()
-print("FINAL ALPHABETICAL ORDER:")
+print(
+    "FINAL ALPHABETICAL ORDER:"
+)
+
 print()
 
-for number, result in enumerate(results, start=1):
+for number, result in enumerate(
+    results,
+    start=1
+):
 
     print(
         f"{number}. "
@@ -624,22 +722,33 @@ for result in results:
             result["picks"].keys()
         )
 
-        if highest_in_entry > highest_game_number:
+        if (
+            highest_in_entry
+            > highest_game_number
+        ):
 
-            highest_game_number = highest_in_entry
+            highest_game_number = (
+                highest_in_entry
+            )
+
 
 if highest_game_number == 0:
 
     highest_game_number = 10
 
+
 print(
-    f"Building {highest_game_number} game row(s)."
+    f"Building "
+    f"{highest_game_number} game row(s)."
 )
 
 print()
 
 
-for game_number in range(1, highest_game_number + 1):
+for game_number in range(
+    1,
+    highest_game_number + 1
+):
 
     row = []
 
@@ -650,9 +759,13 @@ for game_number in range(1, highest_game_number + 1):
             ""
         )
 
-        row.append(pick)
+        row.append(
+            pick
+        )
 
-        row.append("")
+        row.append(
+            ""
+        )
 
     output_rows.append(
         row
@@ -683,15 +796,21 @@ if shutil.which("pbcopy"):
 
     subprocess.run(
         ["pbcopy"],
-        input=clipboard_text.encode("utf-8"),
+        input=clipboard_text.encode(
+            "utf-8"
+        ),
         check=True
     )
 
     print()
+
     print(
-        "Copied to clipboard. Click the FIRST tiebreaker cell "
-        "(top-left), then paste (Command + V)."
+        "Copied to clipboard. "
+        "Click the FIRST tiebreaker cell "
+        "(top-left), then paste "
+        "(Command + V)."
     )
+
     print()
 
 
@@ -702,9 +821,17 @@ if shutil.which("pbcopy"):
 # This does NOT interfere with the Mac version.
 # ============================================================
 
-print("=== CLIPBOARD_DATA_START ===")
-print(clipboard_text)
-print("=== CLIPBOARD_DATA_END ===")
+print(
+    "=== CLIPBOARD_DATA_START ==="
+)
+
+print(
+    clipboard_text
+)
+
+print(
+    "=== CLIPBOARD_DATA_END ==="
+)
 
 
 # ============================================================
@@ -714,6 +841,7 @@ print("=== CLIPBOARD_DATA_END ===")
 print()
 print("DONE")
 print()
+
 
 for result in results:
 
@@ -732,6 +860,7 @@ for result in results:
             f"MISSING - blank placeholder used"
         )
 
+
 print()
 
 
@@ -741,11 +870,12 @@ missing = [
     if not result["entry_id"]
 ]
 
+
 if missing:
 
     print(
-        "Heads up - these people had no picks found and "
-        "were left blank so the columns still line up:"
+        "Heads up - these people had no picks found "
+        "and were left blank so the columns still line up:"
     )
 
     for name in missing:
