@@ -1,5 +1,6 @@
 import requests
-from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from bs4 import BeautifulSoup, SoupStrainer
 import re
 import subprocess
 import warnings
@@ -77,15 +78,27 @@ STANDINGS_URL = "http://www.chiphoward.com/ContestStandings.aspx"
 # GET A WEB PAGE
 # ============================================================
 
+# Number of entry pages downloaded at the same time.
+MAX_WORKERS = 10
+
+# One shared session = connections to the site are kept open and
+# reused instead of doing a brand-new connection for every request.
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
+SESSION.mount(
+    "http://",
+    HTTPAdapter(pool_connections=1, pool_maxsize=MAX_WORKERS)
+)
+SESSION.mount(
+    "https://",
+    HTTPAdapter(pool_connections=1, pool_maxsize=MAX_WORKERS)
+)
+
+
 def get_page(url):
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    response = requests.get(
+    response = SESSION.get(
         url,
-        headers=headers,
         timeout=30
     )
 
@@ -110,7 +123,17 @@ def get_page(url):
 # We DO NOT fall back to an older week's picks.
 # ============================================================
 
-def find_latest_entry(soup, person):
+def build_standings_index(soup):
+    """
+    Read the standings tables ONCE (instead of once per person).
+
+    For every table that has W1, W2, W3... headers this stores:
+      - the newest week number
+      - which row each name is on
+      - the cells sitting under the newest-week header, per row
+    """
+
+    index = []
 
     for table in soup.find_all("table"):
 
@@ -181,20 +204,27 @@ def find_latest_entry(soup, person):
 
                 current_column += colspan
 
+        # Each cell's text is only computed once.
+        text_cache = {}
+
+        def text_of(cell):
+            key = id(cell)
+            if key not in text_cache:
+                text_cache[key] = cell.get_text(
+                    " ",
+                    strip=True
+                )
+            return text_cache[key]
+
         # Find W1, W2, W3, etc. headers and their actual visual
         # positions.
         weekly_headers = {}
 
         for (row_index, column_index), cell in grid.items():
 
-            text = cell.get_text(
-                " ",
-                strip=True
-            )
-
             match = re.fullmatch(
                 r"W(\d+)",
-                text
+                text_of(cell)
             )
 
             if match:
@@ -211,66 +241,78 @@ def find_latest_entry(soup, person):
 
         header_row, _, header_cell = weekly_headers[latest_week]
 
-        header_columns = [
+        header_columns = {
             column_index
             for (row_index, column_index), cell in grid.items()
             if row_index == header_row and cell is header_cell
-        ]
+        }
 
-        # Find the person's row without assuming their name is
-        # necessarily the first physical cell.
-        person_row_index = None
+        # Name -> row lookup (first match wins, same as before).
+        name_to_row = {}
 
         for row_index, cells in row_cells.items():
 
             for _, cell in cells:
 
-                cell_text = cell.get_text(
-                    " ",
-                    strip=True
+                name_to_row.setdefault(
+                    text_of(cell),
+                    row_index
                 )
 
-                if cell_text == person:
-                    person_row_index = row_index
-                    break
+        # Cells sitting under the newest-week header, per row.
+        header_cells_by_row = {}
 
-            if person_row_index is not None:
-                break
+        for (row_index, column_index), cell in grid.items():
+
+            if column_index not in header_columns:
+                continue
+
+            bucket = header_cells_by_row.setdefault(
+                row_index, []
+            )
+
+            if not any(cell is seen for seen in bucket):
+                bucket.append(cell)
+
+        index.append({
+            "latest_week": latest_week,
+            "name_to_row": name_to_row,
+            "header_cells_by_row": header_cells_by_row,
+        })
+
+    return index
+
+
+def find_latest_entry(standings_index, person):
+
+    for table_info in standings_index:
+
+        person_row_index = table_info["name_to_row"].get(person)
 
         if person_row_index is None:
             continue
 
         # Look only underneath the newest-week header.
-        possible_cells = []
-
-        for (row_index, column_index), cell in grid.items():
-
-            if row_index != person_row_index:
-                continue
-
-            if column_index in header_columns and cell not in possible_cells:
-                possible_cells.append(cell)
-
-        for latest_cell in possible_cells:
-
-            cell_html = str(latest_cell)
+        for latest_cell in table_info["header_cells_by_row"].get(
+            person_row_index, []
+        ):
 
             match = re.search(
                 r"ContestEntryView\.aspx\?id=(\d+)",
-                cell_html,
+                str(latest_cell),
                 re.IGNORECASE
             )
 
             if match:
                 return {
-                    "week": latest_week,
+                    "week": table_info["latest_week"],
                     "entry_id": match.group(1)
                 }
 
         # No entry in the newest week means blank. Never fall back
         # to an older week.
         return {
-            "week": latest_week,
+            "week": table_info["latest_week"],
             "entry_id": ""
         }
 
@@ -367,9 +409,14 @@ def extract_score(team_soup):
 
 def parse_entry(html):
 
+    # Only build objects for the lblEntry span, not the whole page.
     soup = BeautifulSoup(
         html,
-        "html.parser"
+        "html.parser",
+        parse_only=SoupStrainer(
+            "span",
+            id="lblEntry"
+        )
     )
 
     entry_label = soup.find(
@@ -403,15 +450,6 @@ def parse_entry(html):
 
         game_number = int(
             game_number
-        )
-
-        game_soup = BeautifulSoup(
-            game_html,
-            "html.parser"
-        )
-
-        strong_tags = game_soup.find_all(
-            "strong"
         )
 
         # ====================================================
@@ -497,6 +535,15 @@ def parse_entry(html):
 
             selected_team = None
 
+            game_soup = BeautifulSoup(
+                game_html,
+                "html.parser"
+            )
+
+            strong_tags = game_soup.find_all(
+                "strong"
+            )
+
             for strong in strong_tags:
 
                 text = strong.get_text(
@@ -557,7 +604,14 @@ print()
 
 standings_soup = BeautifulSoup(
     standings_html,
-    "html.parser"
+    "html.parser",
+    parse_only=SoupStrainer("table")
+)
+
+# Read the standings tables once, up front, so each person's lookup
+# afterwards is instant.
+standings_index = build_standings_index(
+    standings_soup
 )
 
 
@@ -580,7 +634,7 @@ def prepare_person(person):
     try:
 
         entry_info = find_latest_entry(
-            standings_soup,
+            standings_index,
             person
         )
 
@@ -666,9 +720,7 @@ def prepare_person(person):
 
 # Download entry pages concurrently. The standings page is still
 # downloaded exactly once, and each person is still restricted to
-# the newest week only. Five workers keeps the speed improvement
-# reasonable without sending all requests at once.
-MAX_WORKERS = 5
+# the newest week only. MAX_WORKERS is set near the top of the file.
 
 print(
     f"Downloading and parsing entries with up to "
