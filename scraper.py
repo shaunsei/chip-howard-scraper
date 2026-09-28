@@ -115,85 +115,190 @@ def find_latest_entry(soup, person):
 
         rows = table.find_all("tr")
 
-        weekly_columns = []
-
-        # Find all W1, W2, W3, etc. column positions.
-        for row in rows:
-
-            cells = row.find_all(
-                ["th", "td"]
-            )
-
-            for index, cell in enumerate(cells):
-
-                text = cell.get_text(
-                    " ",
-                    strip=True
-                )
-
-                match = re.fullmatch(
-                    r"W(\d+)",
-                    text
-                )
-
-                if match:
-
-                    weekly_columns.append(
-                        (
-                            int(match.group(1)),
-                            index
-                        )
-                    )
-
-            if weekly_columns:
-                break
-
-        if not weekly_columns:
+        if not rows:
             continue
 
-        # Sort newest week first.
-        weekly_columns.sort(
-            reverse=True
-        )
+        # Build a visual table grid so merged cells do not throw
+        # off the week-column positions.
+        grid = {}
+        row_cells = {}
 
-        # The first item is the newest week.
-        latest_week, latest_column_index = weekly_columns[0]
-
-        # Find this person's row.
-        for row in rows:
+        for row_index, row in enumerate(rows):
 
             cells = row.find_all(
-                ["td", "th"]
+                ["th", "td"],
+                recursive=False
             )
 
             if not cells:
-                continue
+                cells = row.find_all(
+                    ["th", "td"]
+                )
 
-            row_name = cells[0].get_text(
+            current_column = 0
+
+            for cell in cells:
+
+                while (
+                    row_index,
+                    current_column
+                ) in grid:
+                    current_column += 1
+
+                try:
+                    colspan = int(
+                        cell.get("colspan", "1")
+                    )
+                except (TypeError, ValueError):
+                    colspan = 1
+
+                try:
+                    rowspan = int(
+                        cell.get("rowspan", "1")
+                    )
+                except (TypeError, ValueError):
+                    rowspan = 1
+
+                colspan = max(
+                    1,
+                    colspan
+                )
+
+                rowspan = max(
+                    1,
+                    rowspan
+                )
+
+                for r in range(
+                    row_index,
+                    row_index + rowspan
+                ):
+
+                    for c in range(
+                        current_column,
+                        current_column + colspan
+                    ):
+
+                        grid[(r, c)] = cell
+
+                row_cells.setdefault(
+                    row_index,
+                    []
+                ).append(
+                    (
+                        current_column,
+                        cell
+                    )
+                )
+
+                current_column += colspan
+
+        # Find the W1, W2, W3, etc. headers and their actual
+        # visual positions.
+        weekly_headers = {}
+
+        for (row_index, column_index), cell in grid.items():
+
+            text = cell.get_text(
                 " ",
                 strip=True
             )
 
-            if row_name != person:
+            match = re.fullmatch(
+                r"W(\d+)",
+                text
+            )
+
+            if match:
+
+                week_number = int(
+                    match.group(1)
+                )
+
+                weekly_headers[
+                    week_number
+                ] = (
+                    row_index,
+                    column_index,
+                    cell
+                )
+
+        if not weekly_headers:
+            continue
+
+        latest_week = max(
+            weekly_headers.keys()
+        )
+
+        header_row, header_column, header_cell = (
+            weekly_headers[latest_week]
+        )
+
+        # Find every visual column covered by the newest-week
+        # header cell.  This handles colspan correctly.
+        header_columns = [
+            column_index
+            for (
+                row_index,
+                column_index
+            ), cell in grid.items()
+            if (
+                row_index == header_row
+                and cell is header_cell
+            )
+        ]
+
+        # Find this person's row.  We don't assume their name
+        # is necessarily the first physical cell.
+        person_row_index = None
+
+        for row_index, cells in row_cells.items():
+
+            for column_index, cell in cells:
+
+                cell_text = cell.get_text(
+                    " ",
+                    strip=True
+                )
+
+                if cell_text == person:
+
+                    person_row_index = row_index
+                    break
+
+            if person_row_index is not None:
+                break
+
+        if person_row_index is None:
+            continue
+
+        # Get the actual cell(s) underneath the newest-week
+        # header.
+        possible_cells = []
+
+        for (
+            row_index,
+            column_index
+        ), cell in grid.items():
+
+            if row_index != person_row_index:
                 continue
 
-            # Make sure the newest-week column exists.
-            if latest_column_index >= len(cells):
+            if column_index in header_columns:
 
-                return {
-                    "week": latest_week,
-                    "entry_id": ""
-                }
+                if cell not in possible_cells:
 
-            latest_cell = cells[
-                latest_column_index
-            ]
+                    possible_cells.append(
+                        cell
+                    )
+
+        # Look for a real entry link in the newest week only.
+        for latest_cell in possible_cells:
 
             cell_html = str(
                 latest_cell
             )
 
-            # Look for an actual entry link in the CURRENT week.
             match = re.search(
                 r"ContestEntryView\.aspx\?id=(\d+)",
                 cell_html,
@@ -207,17 +312,15 @@ def find_latest_entry(soup, person):
                     "entry_id": match.group(1)
                 }
 
-            # No entry link means the person did not submit
-            # picks for the newest week.
-            #
-            # IMPORTANT:
-            # Do NOT fall back to an older week.
-            return {
-                "week": latest_week,
-                "entry_id": ""
-            }
+        # The person exists, but there is no entry link in the
+        # newest week. Leave them blank. Never use an older week.
+        return {
+            "week": latest_week,
+            "entry_id": ""
+        }
 
     return None
+
 
 
 # ============================================================
